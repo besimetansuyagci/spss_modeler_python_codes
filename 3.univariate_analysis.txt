@@ -1,0 +1,155 @@
+import modeler.api
+import uuid
+import os, sys
+
+diagram = modeler.script.diagram()
+print(diagram)
+
+class FILETOKENS:
+    values = dict([])
+    
+def replace_all(str, fromStr, toStr):
+    oldStr = ''
+    while (oldStr != str):
+        oldStr = str
+        str = str.replace(fromStr, toStr)
+    return str
+
+def normalize_str(str):
+    str = str.replace(',', '')
+    str = str.replace('\t', '')    
+    str = str.replace('%', '')
+    str = str.replace(' ', '')                    
+    str = replace_all(str, ' ', '')    
+    return str
+
+def read_file_for_tokens(fName, tokens):
+    ret = FILETOKENS() 
+    
+    ret.values.clear()
+    
+    file = open(fName, 'r')
+    for line in file:
+        for token in tokens:
+            index = -1;
+            if token in line:       
+                
+                token = replace_all(token, '\t', '')                
+                line = replace_all(line, token, '')
+                line = replace_all(line, '\t', ' ')
+                line = replace_all(line, '\r', ' ')
+                line = replace_all(line, '\n', ' ')                
+                line = replace_all(line, '  ', ' ');
+                    
+                lineValues = line.split(' ')                
+                totalFields = 0                    
+                for fieldValue in lineValues:
+                    fValue = normalize_str(fieldValue)                                       
+                    if len(fValue) > 0:                        
+                        totalFields = totalFields + 1
+                fCnt = 0
+                for fieldValue in lineValues:
+                    fValue = normalize_str(fieldValue)
+                    if len(fValue) > 0 :
+                        fCnt = fCnt + 1
+                        dictItem = ''
+                        if (totalFields == 1):
+                            dictItem = token
+                        else:
+                            dictItem = token + str(fCnt)
+                        
+                        ret.values[dictItem] = fValue
+    file.close()         
+    return ret
+
+def predecessor(node):
+    return node.getProcessorDiagram().predecessorAt(node, 0)
+
+def addRelative(pred, node, xdiff, ydiff):
+    x = pred.getXPosition()
+    y = pred.getYPosition()
+    node.setXYPosition(x+xdiff, y+ydiff)
+    pred.getProcessorDiagram().link(pred, node)
+
+def addAfter(pred, node):
+    addRelative(pred, node, 100, 0)
+
+def addBelow(pred, node):
+    addRelative(pred, node, 0, 100)
+
+def univariate_analysis(any_type,diagram,output_direction):    
+    univariate_fields = any_type.getOutputDataModel()   
+    home_dir = output_direction + '\\' + str(uuid.uuid1().hex)
+    os.mkdir(home_dir)              
+
+    out_woe_file_name = 'gini_list.txt'	
+    woe_home_dir = home_dir + '\\' + out_woe_file_name
+
+    f = open(woe_home_dir, 'a')
+    f.write("VARIABLE" + '\t' + "GINI" + '\n')
+    f.close()
+
+    for field in univariate_fields:
+
+        if (str(field.getColumnName()) != "TARGET" ):
+
+            LogRegNode = diagram.create("logreg", str(field.getColumnName()))
+            LogRegNode.setPropertyValue("custom_fields", True)
+            LogRegNode.setPropertyValue("target", "TARGET")
+            LogRegNode.setPropertyValue("inputs", str(field.getColumnName()))
+            LogRegNode.setPropertyValue("use_model_name", True)
+            LogRegNode.setPropertyValue("model_name", str(field.getColumnName()))
+            LogRegNode.setPropertyValue("use_partitioned_data", True)
+            LogRegNode.setPropertyValue("method", "Enter")
+            LogRegNode.setPropertyValue("logistic_procedure", "Multinomial")
+            LogRegNode.setPropertyValue("model_type", "MainEffects")
+            LogRegNode.setPropertyValue("include_constant", True)
+            addAfter(any_type,LogRegNode)              
+            results_1 = []
+
+            try:
+                LogRegNode.run(results_1)          
+                if len(results_1) > 0:
+
+					LogRegModel = results_1[0]
+					pred = predecessor(LogRegNode)
+					apply_log_reg = diagram.createModelApplier(LogRegModel , str(field.getColumnName()))
+					addBelow(pred, apply_log_reg)
+
+					AnalysisNode = diagram.create("analysis", str(field.getColumnName()))
+					AnalysisNode.setPropertyValue("evaluation_binary", True)
+					AnalysisNode.setPropertyValue("output_mode", "File")
+					AnalysisNode.setPropertyValue("output_format", "Text")
+					AnalysisNode.setPropertyValue("output_name", str(field.getColumnName())) 
+					txtFileName = home_dir + '\\' + str(field.getColumnName()) + ".txt"
+					AnalysisNode.setPropertyValue("full_filename", txtFileName )
+					addAfter(apply_log_reg, AnalysisNode)
+					results_2 = []
+					AnalysisNode.run(results_2)
+
+					tokens = ['Correct', 'Wrong', 'Total', '\t\t$L-TARGET']
+					ret = read_file_for_tokens(txtFileName, tokens)
+					a2 = ret.values['$L-TARGET2']
+
+					diagram.delete(AnalysisNode)
+					diagram.delete(apply_log_reg)
+					temp_reg_node = diagram.findByType("logreg", str(field.getColumnName()))
+					diagram.delete(temp_reg_node)
+
+					print str(field.getColumnName()), a2
+					f = open(woe_home_dir, 'a')
+					woe_var_name = str(field.getColumnName())
+					f.write(woe_var_name + '\t' + str(a2)+ '\n')
+				
+            except modeler.api.ModelerException, e:
+                print str(field.getColumnName()), "An error occurred:", e.getMessage()
+            except java.lang.Exception, e:
+                print str(field.getColumnName()), "A Java exception occurred:", e.getMessage()
+    f.close()
+type_node = diagram.findByID("XXXX")				# Replace XXXX with unique id of the type node (in which there are variables you want to do univariate analysis)
+
+direction = 'YYYY'                        # Replace YYYY with a path that outputs will be saved
+
+print "Variable Gini"
+univariate_analysis(type_node,diagram,direction)
+

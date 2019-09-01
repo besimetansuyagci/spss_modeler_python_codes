@@ -1,0 +1,144 @@
+import modeler
+import uuid
+import os, sys
+
+diagram = modeler.script.diagram()
+print(diagram)
+
+def predecessor(node):
+    return node.getProcessorDiagram().predecessorAt(node, 0)
+
+def addRelative(pred, node, xdiff, ydiff):
+    x = pred.getXPosition()
+    y = pred.getYPosition()
+    node.setXYPosition(x+xdiff, y+ydiff)
+    pred.getProcessorDiagram().link(pred, node)
+
+def addAfter(pred, node):
+    addRelative(pred, node, 75, 0)
+
+def addBelow(pred, node):
+    addRelative(pred, node, 0, 100)
+
+def addBeginning(pred, node, xdiff, ydiff):
+    x = pred.getXPosition()
+    y = pred.getYPosition()
+    node.setXYPosition(0, y+ydiff)
+    pred.getProcessorDiagram().link(pred, node)
+
+def addBegin(pred, node):
+    addBeginning(pred, node, 0, 25)
+
+woe_type_node = diagram.findByID("XXXX")	# Replace XXXX with unique id of the type node (in which there are variables you categorize in first step and now you will calculate woe of the variables)
+woe_fields = woe_type_node.getOutputDataModel() 
+
+process_supernode = modeler.script.stream().findByID("YYYY")   # Replace YYYY with unique id of "WOE Supernode" (This supernode should be prepared before executing this script.)
+childDiagram = process_supernode.getChildDiagram()
+
+derive_supernode = modeler.script.stream().create("process_super", "WOE_Derive_SuperNode")
+childDiagram2 = derive_supernode.getChildDiagram()
+childDiagramFilter = childDiagram2.create("filter","in")
+childDiagram2.linkFromInputConnector(childDiagramFilter)
+chaid_child_diagram_out_filter = childDiagram2.create("filter","out")
+childDiagram2.linkToOutputConnector(chaid_child_diagram_out_filter)
+addAfter(woe_type_node,derive_supernode)
+
+field_count = 0
+for field in woe_fields:
+    field_count += 1
+
+limit = 20
+limit_count = 0  
+
+output_direction = 'YYYY'	# Replace YYYY with a path that outputs will be saved
+home_dir = output_direction + '\\' + str(uuid.uuid1().hex) + '_XXXXX'	# Replace _XXXXX with a specific name. It will be added as suffix to generated folder name.
+os.mkdir(home_dir)   
+
+out_woe_file_name = 'woe_list.txt'	z
+woe_home_dir = home_dir + '\\' + out_woe_file_name
+
+f = open(woe_home_dir, 'a')
+f.write("VARIABLE" + '\t' + "BIN" + '\t' + "WOE" + '\n')
+f.close()
+
+for field in woe_fields:
+
+    if (str(field.getColumnName()) != "TARGET" ):
+ 
+        try:
+            drvNode1 = childDiagram.findByType("derive", "VAR")            
+            drvNode1.setPropertyValue("formula_expr", "'" + str(field.getColumnName()) + "'")
+            drvNode1.setPropertyValue("new_name", "VAR")
+
+            woe_table = childDiagram.findByType("table",None)
+            woe_table.setPropertyValue("output_name", str(field.getColumnName()))
+            results_3 = []
+            woe_table.run(results_3)
+            woe_table_output = results_3[0]
+            woe_rowset = woe_table_output.getRowSet()
+            woe_rowcount = woe_rowset.getRowCount()
+
+            row = 0
+            column = 0
+            woe_condition = ""
+
+            if woe_rowcount > 1 :
+                
+                else_part = " else 0 endif"
+                
+                if ((type(woe_rowset.getValueAt(row,column)) is int) == True):
+                    if_part = "if " + "'" + str(field.getColumnName()) + "'" + " = " + str(woe_rowset.getValueAt(row,column)) + " then " + str(woe_rowset.getValueAt(row,column+1))   
+                    
+                elif ((type(woe_rowset.getValueAt(row,column)) is int) == False):	
+                    if_part = "if " + "'" + str(field.getColumnName()) + "'" + " = " + " \"" + str(woe_rowset.getValueAt(row,column)) + "\" " + " then " + str(woe_rowset.getValueAt(row,column+1))				
+
+                else: 
+                    if_part = ""     
+                
+                f = open(woe_home_dir, 'a')
+                woe_var_name = str(field.getColumnName())
+                f.write(woe_var_name + '\t' + str(woe_rowset.getValueAt(row,column)) + '\t' + str(woe_rowset.getValueAt(row,column+1)) + '\n')
+                row += 1
+
+                elseif_part = ""
+
+                for row in range (row,woe_rowcount):
+
+                    if ((type(woe_rowset.getValueAt(row,column)) is int) == True):
+                        elseif_part += " elseif " + "'" + str(field.getColumnName()) + "'" + " = " + str(woe_rowset.getValueAt(row,column)) + " then " + str(woe_rowset.getValueAt(row,column+1))
+                        
+                    elif ((type(woe_rowset.getValueAt(row,column)) is int) == False):	
+                        elseif_part += " elseif " + "'" + str(field.getColumnName()) + "'" + " = " + " \"" + str(woe_rowset.getValueAt(row,column)) + "\" " + " then " + str(woe_rowset.getValueAt(row,column+1))	
+                        
+                    else: 
+                        if_part = "" 
+
+                    f.write(woe_var_name + '\t' + str(woe_rowset.getValueAt(row,column)) + '\t' + str(woe_rowset.getValueAt(row,column+1)) + '\n')
+                    row += 1
+
+                f.close()
+                woe_condition = "" + if_part + elseif_part + else_part
+                
+                drvNode2 = childDiagram2.create("derive", "WOE_" + str(field.getColumnName()))
+                drvNode2.setPropertyValue("formula_expr",woe_condition)
+                drvNode2.setPropertyValue("new_name","WOE_" + str(field.getColumnName()))
+
+                limit_count += 1
+
+                if limit_count % limit == 0:
+                    addBegin(childDiagramFilter,drvNode2)
+                else:
+                    addAfter(childDiagramFilter,drvNode2)
+                
+                childDiagramFilter = drvNode2
+                last_dr_node = drvNode2
+
+        except modeler.api.ModelerException, e:                
+            print str(field.getColumnName()), "An error occurred:", e.getMessage()                
+        except java.lang.Exception, e:
+            print str(field.getColumnName()), "A Java exception occurred:", e.getMessage()
+	
+f.close()	
+addAfter(last_dr_node,chaid_child_diagram_out_filter)
+
+print "\n\nExecution ended!"

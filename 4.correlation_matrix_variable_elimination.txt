@@ -1,0 +1,248 @@
+﻿import os
+import datetime
+
+class field_gini_data:
+    def __init__(self, fld_name, gn_value):
+        self.field_name = fld_name
+        self.gini_value = gn_value
+        self.eliminated = False 
+        self.item_index = -1 
+
+    def __lt__(self, other):
+        return other.gini_value < self.gini_value          
+
+def read_gini_values(gini_file_name):
+    values = []
+    f = open(gini_file_name, 'r')
+    line_cnt = 0
+    for line_str in f:            
+        line_cnt = line_cnt + 1
+        parts = line_str.split('\t', 2)        
+        g_value = parts[1].strip()
+        float_value = 0.0
+        try:
+            float_value = float(g_value)
+        except:
+            float_value = 0.0
+            pass
+        if float_value > 0.0:
+            item = field_gini_data(parts[0], float_value)
+            values.append(item)
+    return values
+
+def add_if_str(seperator, to_str, add_str):
+    if len(add_str) == 0:
+        return to_str
+    else:
+        if len(to_str) > 0:
+            return to_str + seperator + add_str
+        else:
+            return add_str
+    
+def read_correlation_matrix_file(correlation_file_name):
+    values = {}
+    rows = []
+    current_field = ""
+    current_correlation_str = ""
+    current_correlation_value = 0.0
+    pearson_correlations_started = False
+    f = open(correlation_file_name, 'r')    
+    for line_str in f:                    
+        correlated_field = ""
+        line_str = line_str.replace('\n', '')
+
+        pearson_correlations_index = line_str.find("Pearson Correlations")
+        if pearson_correlations_index != -1:
+            pearson_correlations_started = True
+
+        line_tokens = line_str.split('\t')
+        if line_str.find('\t\t') == 0 :
+            str = line_tokens[2]
+            spc_index = str.find(' ')
+            if spc_index > 0:
+                str = str[:spc_index]
+            correlated_field = str
+            str = line_tokens[2][spc_index:]
+    
+            right_str = ""
+            none_space_index = len(str) - len(str.lstrip())
+            if none_space_index != -1:
+                right_str = str[none_space_index:]
+            spc_index = right_str.find(' ')
+            if spc_index > 0:
+                right_str = right_str[:spc_index]
+            current_correlation_str = right_str            
+        else:
+            if line_str.find('\t') == -1 and len(line_tokens[0]) > 0:
+                current_field = line_tokens[0]
+                pearson_correlations_started = False
+        
+        if len(current_field) > 0 and len(correlated_field) > 0 and len(current_correlation_str) > 0:
+            is_valid_correlation_value = True
+            try:
+                current_correlation_value = float(current_correlation_str)
+            except:
+                is_valid_correlation_value = False    
+                pass
+
+            if is_valid_correlation_value and pearson_correlations_started:
+                cell_key = current_field + "-" + correlated_field
+                values[cell_key] = current_correlation_value
+            
+                if not correlated_field in rows:
+                    rows.append(correlated_field)
+        
+    return values, rows
+    
+def export_correlation_matrix(correlations, rows, gini_values, out_matrix_file_name, decimal_seperator_character):
+    f = open(out_matrix_file_name, 'w')
+
+    s = ""
+    s = add_if_str("\t", s, " ")
+    s = add_if_str("\t", s, " ")
+    s = add_if_str("\t", s, " ")
+    cnt = 0
+    for row in rows:
+        cnt = cnt + 1
+        s = add_if_str("\t", s, str(cnt))
+    s = s + "\n"
+    f.write(s)
+    
+    s = ""
+    s = add_if_str("\t", s, "#")
+    s = add_if_str("\t", s, "Variable")
+    s = add_if_str("\t", s, "Gini")
+    cnt = 0
+    for row in rows:
+        cnt = cnt + 1
+        s = add_if_str("\t", s, row)
+    s = s + "\n"
+    f.write(s)
+    
+    cnt = 0
+    for row in rows:
+        cnt = cnt + 1
+        field = row
+        s = ""
+        s = add_if_str("\t", s, str(cnt))
+        s = add_if_str("\t", s, field)
+        fnd_gini_value = 0.0
+        fnd = False
+        for item in gini_values:
+            if item.field_name == field:
+                fnd_gini_value = item.gini_value
+                break
+
+        gini_value_str = str(fnd_gini_value)
+        if gini_value_str.find('.') >= 0 and decimal_seperator_character != '.':
+            gini_value_str = gini_value_str.replace('.', decimal_seperator_character)
+        elif gini_value_str.find(',') >= 0 and decimal_seperator_character != ',':
+            gini_value_str= gini_value_str.replace(',', decimal_seperator_character)    
+
+        s = add_if_str("\t", s, gini_value_str)
+        
+        for inner_row in rows:
+            cross_field = inner_row
+            cell_key = field + "-" + cross_field
+            cell_value = 1.0
+            if cell_key in correlations:
+                cell_value = correlations[cell_key]
+
+            value = str(cell_value)
+            if value.find('.') >= 0 and decimal_seperator_character != '.':
+                value = value.replace('.', decimal_seperator_character)
+            elif value.find(',') >= 0 and decimal_seperator_character != ',':
+                value = value.replace(',', decimal_seperator_character)    
+            s = add_if_str("\t", s, value)
+
+        f.write(s+"\n")
+
+    f.close()
+    return
+
+def get_correlated_fields(correlations, rows, field_name, correlation_limit):
+    correlated_fields = {}
+
+    for row in rows:
+        cross_field = row
+        cell_key = field_name + "-" + cross_field
+        
+        value = 0.0
+        if cell_key in correlations:
+            value = correlations[cell_key]
+        if abs(value) >= correlation_limit:
+            correlated_fields[cross_field] = value        
+    
+    return correlated_fields
+
+def eliminate_and_export_fields(correlations, rows, gini_values, out_gini_file_name, correlation_limit, decimal_seperator_character):
+    f = open(out_gini_file_name, 'w')
+   
+    for item in gini_values:
+        item.eliminated = False
+    
+    for item in gini_values:
+        current_field = item
+        correlated_cells = get_correlated_fields(correlations, rows, current_field.field_name, correlation_limit)
+
+        if not current_field.eliminated:
+            for inner_item in gini_values:
+                if inner_item.item_index > item.item_index:
+                    if inner_item.field_name in correlated_cells:
+                        inner_item.eliminated = True
+
+    s = ""
+    s = add_if_str("\t", s, "Variable")
+    s = add_if_str("\t", s, "Gini")
+    f.write(s+"\n")
+
+    for item in gini_values:
+        if not item.eliminated:
+            s = ""
+            s = add_if_str("\t", s, item.field_name)
+
+            value = str(item.gini_value)
+            if value.find('.') >= 0 and decimal_seperator_character != '.':
+                value = value.replace('.', decimal_seperator_character)
+            elif value.find(',') >= 0 and decimal_seperator_character != ',':
+                value = value.replace(',', decimal_seperator_character)                
+
+            s = add_if_str("\t", s, value)
+            f.write(s+"\n")
+
+    f.close();    
+    return
+
+def build_spss_correlation_matrix(correlation_file_name, gini_file_name, correlation_limit, decimal_seperator_character):    
+    f_head, f_tail = os.path.split(correlation_file_name)
+    f_name, f_extension = os.path.splitext(f_tail)
+    now = datetime.datetime.now()    
+    time_stamp = "_" + now.isoformat()
+    time_stamp = time_stamp.replace(':', '_')
+    out_matrix_file_name = f_head + "\\" + f_name + time_stamp + "_CRRL_MATRIX" + f_extension
+    out_gini_file_name = f_head + "\\" + f_name + time_stamp + "_GINI_" + str(int(correlation_limit * 100)) + f_extension
+    
+    gini_values = read_gini_values(gini_file_name)
+    gini_values.sort()
+    counter = 0
+    for item in gini_values:
+        item.item_index = counter
+        counter = counter + 1 
+
+    correlations, rows = read_correlation_matrix_file(correlation_file_name)    
+    rows.sort()
+
+    export_correlation_matrix(correlations, rows, gini_values, out_matrix_file_name, decimal_seperator_character)
+
+    eliminate_and_export_fields(correlations, rows, gini_values, out_gini_file_name, correlation_limit, decimal_seperator_character)
+
+    return
+
+homedir = r"YYYY"	   # Replace YYYY with a path in which gini and statistics text files are placed
+gini_file_name = "XXXX.txt"	       # Replace XXXX with your gini text file name
+cr_file_name = "ZZZZ.txt"		   # Replace YYYY with your statistics node text output file name
+
+cr_home_dir = homedir + '\\' + cr_file_name
+gini_home_dir = homedir + '\\' + gini_file_name
+
+build_spss_correlation_matrix(cr_home_dir, gini_home_dir, 0.5, ",")     # You may change 0.5 correlation limit by giving values btw 0 and 1

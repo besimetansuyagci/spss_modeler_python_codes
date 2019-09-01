@@ -1,0 +1,248 @@
+import modeler.api
+import uuid
+import os, sys
+
+taskrunner = modeler.script.session().getTaskRunner()
+diagram = modeler.script.diagram()
+print(diagram)
+
+
+def get_attribute(str, attr):
+    value = ""
+    fnd_str = attr + "=\""
+    beg = str.find(fnd_str)
+    if beg >= 0:
+        end = str.find("\"", beg + len(attr) + 2)
+        if end >= 0:
+            value = str[beg + len(fnd_str):end]
+    return value
+
+
+def add_to_full_condition(full_cnd, added_cnd, then_value, current_field, is_nominal):
+    if (len(added_cnd) == 0):
+        return full_cnd
+    if (len(full_cnd) == 0):
+        if is_nominal:
+            full_cnd = "if @NULL(" + "'" + current_field + "'" + ") or @BLANK(" + "'" + current_field + "'" + ") or " + "'" + current_field + "'" + " = \"\" then 1 elseif "
+        else:
+            full_cnd = "if @NULL(" + "'" + current_field + "'" + ") or @BLANK(" + "'" + current_field + "'" + ") then 1 elseif "
+    else:
+        full_cnd = full_cnd + " elseif "
+    if (len(added_cnd) > 0):
+        full_cnd = full_cnd + added_cnd + " then " + then_value
+    return full_cnd
+
+
+def find_nominal_field_index(nominal_fields, field):
+    cnt = 0;
+    for nominal_fieldName in nominal_fields:
+        cnt = cnt + 1
+        if (nominal_fieldName == field):
+            return cnt
+    return -1
+
+
+def add_to_current_condition(nominal_fields, current_cnd, compound_operator, field, operator, value):
+    nominal_index = find_nominal_field_index(nominal_fields, field)
+
+    if (nominal_index >= 0):
+        value = "\"" + value + "\""
+
+    if (len(current_cnd) > 0):
+        current_cnd = current_cnd + " " + compound_operator + " " + "'" + field + "'" + " " + operator + " " + unicode(value)
+    else:
+        current_cnd = "'" + field + "'" + " " + operator + " " + unicode(value)
+    return current_cnd
+
+
+def get_operator_sign(operator):
+    if (operator == "equal"):
+        return "=", False
+    elif (operator == "notEqual"):
+        return "<>", False
+    elif (operator == "lessThan"):
+        return "<", False
+    elif (operator == "lessOrEqual"):
+        return "<=", False
+    elif (operator == "greaterThan"):
+        return ">", False
+    elif (operator == "greaterOrEqual"):
+        return ">=", False
+    elif (operator == "isMissing"):
+        return "=", True
+    return "", True
+
+
+def increment_node_id(node_id):
+    int_val = int(node_id)
+    int_val = int_val + 1
+
+    return str(int_val)
+
+
+def PMMLToIfElse(file_name):
+    full_condition = "";  
+    try:
+        f = open(file_name, 'r')
+        nominal_field_list = []
+
+        current_condition = "";
+        current_node_id = "";
+        last_node_id = "";
+        current_compound_operator = "";
+        current_field = "";
+        current_operator = "";
+        current_value = "";
+
+        for line_str in f:
+            if line_str.find("<DataField ") >= 0:
+                fld = get_attribute(line_str, "name")
+                op_type = get_attribute(line_str, "optype")
+                data_type = get_attribute(line_str, "dataType")
+                if ((op_type == "categorical") and (data_type == "string")):
+                    nominal_field_list.append(fld)
+            if line_str.find("<Node ") >= 0:
+                last_node_id = current_node_id
+                current_node_id = get_attribute(line_str, "id")
+            if line_str.find("<CompoundPredicate ") >= 0:
+                current_compound_operator = get_attribute(line_str, "booleanOperator")
+                if (current_compound_operator == "surrogate"):
+                    is_nominal = find_nominal_field_index(nominal_field_list, current_field) > -1
+                    full_condition = add_to_full_condition(full_condition, current_condition,
+                                                           increment_node_id(last_node_id), current_field, is_nominal)
+                    current_condition = ""
+            if line_str.find("<SimplePredicate ") >= 0:
+                current_field = get_attribute(line_str, "field")
+                current_operator, skip = get_operator_sign(get_attribute(line_str, "operator"))
+                if not skip:
+                    current_value = get_attribute(line_str, "value")
+                    current_condition = add_to_current_condition(nominal_field_list, current_condition,
+                                                                 current_compound_operator, current_field,
+                                                                 current_operator, current_value)
+        is_nominal = find_nominal_field_index(nominal_field_list, current_field) > -1
+        full_condition = add_to_full_condition(full_condition, current_condition, increment_node_id(current_node_id),
+                                               current_field, is_nominal)
+        if (len(full_condition) > 0):
+            full_condition = full_condition + " else 0 endif "
+        f.close()
+    except Exception:
+        print("Error reading file " + file_name + "\n\n")
+
+    except modeler.api.ModelerException, e:
+         print ("Error reading file "+file_name+"\n\n")
+         print (e.getMessage())
+    return full_condition
+
+
+def predecessor(node):
+    return node.getProcessorDiagram().predecessorAt(node, 0)
+
+
+def addRelative(pred, node, xdiff, ydiff):
+    x = pred.getXPosition()
+    y = pred.getYPosition()
+    node.setXYPosition(x+xdiff, y+ydiff)
+    pred.getProcessorDiagram().link(pred, node)
+
+
+def addAfter(pred, node):
+    addRelative(pred, node, 75, 0)
+
+
+def addBegin(pred, node):
+    addBeginning(pred, node, 0, 25)
+
+
+def addBeginning(pred, node, xdiff, ydiff):
+    x = pred.getXPosition()
+    y = pred.getYPosition()
+    node.setXYPosition(0, y+ydiff)
+    pred.getProcessorDiagram().link(pred, node)
+
+
+def addBelow(pred, node):
+    addRelative(pred, node, 0, 100)
+
+
+def chaid_binning(any_type,diagram,output_direction):    
+    binning_fields = any_type.getOutputDataModel()   
+    home_dir = output_direction + '\\' + str(uuid.uuid1().hex)
+    os.mkdir(home_dir)              
+
+    chaid_derive_supernode = modeler.script.stream().create("process_super", "CHAID_DR")
+    chaid_child_diagram = chaid_derive_supernode.getChildDiagram()
+    chaid_child_diagram_filter = chaid_child_diagram.create("filter","in")
+    chaid_child_diagram.linkFromInputConnector(chaid_child_diagram_filter)
+
+    addAfter(any_type,chaid_derive_supernode)
+
+    chaid_child_diagram_out_filter = chaid_child_diagram.create("filter","out")
+    chaid_child_diagram.linkToOutputConnector(chaid_child_diagram_out_filter)
+
+    field_count = 0
+    for field in binning_fields:
+        field_count += 1
+
+    limit = 20
+    limit_count = 0    
+
+    for field in binning_fields:
+        
+        if (str(field.getColumnName()) != "TARGET" ):
+            
+            ChaidNode = diagram.create("chaid", str(field.getColumnName()))
+            ChaidNode.setPropertyValue("custom_fields", True)
+            ChaidNode.setPropertyValue("target", "TARGET")
+            ChaidNode.setPropertyValue("inputs", str(field.getColumnName()))
+            ChaidNode.setPropertyValue("use_model_name", True)
+            ChaidNode.setPropertyValue("model_name", str(field.getColumnName()))
+            ChaidNode.setPropertyValue("method", "Chaid")
+            addRelative(any_type,ChaidNode,50,50)              
+            results_1 = []
+            try:           
+                ChaidNode.run(results_1)
+                if len(results_1) > 0:
+                    ChaidModel = results_1[0]
+                    pred = predecessor(ChaidNode)
+                    apply_chaid = diagram.createModelApplier(ChaidModel, str(field.getColumnName()))
+                    addBelow(pred, apply_chaid)
+                    
+                    modelFile = home_dir + '\\' + "CHAID" + "_PMML_" + str(field.getColumnName()) + ".XML"	                                  
+                    taskrunner.exportModelToFile(apply_chaid, modelFile, modeler.api.FileFormat.XML)
+                    
+                    if_else_str = PMMLToIfElse(modelFile)
+
+                    chaid_drvNode = chaid_child_diagram.create("derive", "CHAID_OPT_" + str(field.getColumnName()))
+                    chaid_drvNode.setPropertyValue("formula_measure_type","Set")
+                    chaid_drvNode.setPropertyValue("formula_expr",if_else_str)
+                    chaid_drvNode.setPropertyValue("new_name", "CHAID_OPT_" + str(field.getColumnName()))
+                             
+                    limit_count += 1
+
+                    if limit_count % limit == 0:
+                        addBegin(chaid_child_diagram_filter,chaid_drvNode)
+                    else:
+                        addAfter(chaid_child_diagram_filter,chaid_drvNode)
+
+                    chaid_child_diagram_filter = chaid_drvNode
+                    diagram.delete(apply_chaid) 
+                
+            except modeler.api.ModelerException, e:                
+                print str(field.getColumnName()), "An error occurred:", e.getMessage()                
+            except java.lang.Exception, e:
+                print str(field.getColumnName()), "A Java exception occurred:", e.getMessage()
+        
+            temp_chaid = diagram.findByType("chaid", str(field.getColumnName()))
+            diagram.delete(temp_chaid)
+
+    addAfter(chaid_drvNode,chaid_child_diagram_out_filter)
+    print "\n\nExecution Ended!!"
+        
+chaid_type_node = diagram.findByID("XXXXXXXX")     # Replace XXXXXXXX with unique id of the type node (in which there are variables you want to categorize them using chaid node)
+direction = 'YYYYYYYY'                    		   # Replace YYYYYYYY with a path that pmml files of chaid models' will be saved
+
+chaid_binning(chaid_type_node,diagram,direction)
+
+
+
+
